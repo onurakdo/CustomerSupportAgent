@@ -7,7 +7,17 @@
     "agentcore:created-by": "agentcore-cli",
     "agentcore:project-name": "CustomerSupportAgent"
   },
-  "runtimes": [],
+  "runtimes": [
+    {
+      "name": "CustomerSupportAgent",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/CustomerSupportAgent/",
+      "runtimeVersion": "PYTHON_3_14",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP"
+    }
+  ],
   "memories": [],
   "knowledgeBases": [],
   "credentials": [],
