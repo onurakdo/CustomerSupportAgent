@@ -1,6 +1,6 @@
 # Production-Like Customer Support Agent
 
-An Amazon Bedrock AgentCore customer support agent built with **Strands**. It runs on AgentCore Runtime, calls business tools through an MCP Gateway, uses AgentCore Memory for cross-session recall, and applies IAM, Cedar authorization, retries, idempotency, and OpenTelemetry observability.
+An Amazon Bedrock AgentCore customer support agent built with **Strands**, documented further in [Screenshots.docx](Screenshots.docx). It runs on AgentCore Runtime, calls business tools through an MCP Gateway, uses AgentCore Memory for cross-session recall, and applies IAM, Cedar authorization, retries, idempotency, and OpenTelemetry observability.
 
 ## Architecture
 
