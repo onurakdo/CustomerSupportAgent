@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# Virtual environments
+.venv/
+.venv-test/
+venv/
+ENV/
+env/
+
+# CDK / build artifacts
+cdk.out/
+dist/
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
