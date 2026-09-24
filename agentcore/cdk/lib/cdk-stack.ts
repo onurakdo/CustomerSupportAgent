@@ -8,8 +8,12 @@ import {
   type CustomJWTAuthorizerConfig,
   type HarnessDeploymentConfig,
 } from '@aws/agentcore-cdk';
-import { CfnOutput, Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import * as bedrockagentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as path from 'path';
 import { Construct } from 'constructs';
 
 /**
@@ -74,6 +78,11 @@ export interface AgentCoreStackProps extends StackProps {
    * Payment specifications with resolved credential provider ARNs.
    */
   paymentSpec?: PaymentSpec[];
+  /**
+   * Absolute path to the project root (parent of the agentcore/ directory).
+   * Used to resolve local Lambda asset directories such as tools/.
+   */
+  projectRoot?: string;
 }
 
 function toCdkId(name: string): string {
@@ -109,7 +118,7 @@ export class AgentCoreStack extends Stack {
   constructor(scope: Construct, id: string, props: AgentCoreStackProps) {
     super(scope, id, props);
 
-    const { spec, mcpSpec, credentials, harnesses, connectorParametersByFile, paymentSpec } = props;
+    const { spec, mcpSpec, credentials, harnesses, connectorParametersByFile, paymentSpec, projectRoot } = props;
 
     // Create AgentCoreApplication with all agents and harness roles
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -125,15 +134,109 @@ export class AgentCoreStack extends Stack {
     }
     this.application = new AgentCoreApplication(this, 'Application', appProps as any);
 
+    // Grant the deployed Gemini credential explicitly because the published L3
+    // construct currently drops the CLI schema's credential fields.
+    for (const env of this.application.environments.values()) {
+      env.runtime.role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          actions: ['bedrock-agentcore:GetResourceApiKey'],
+          resources: [`arn:${this.partition}:bedrock-agentcore:*:${this.account}:token-vault/default/apikeycredentialprovider/GEMINI`],
+        })
+      );
+      // Allow the agent runtime to invoke the MCP gateway (SigV4), scoped to
+      // gateways in this account/region for least privilege.
+      env.runtime.role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          actions: ['bedrock-agentcore:InvokeGateway'],
+          resources: [`arn:${this.partition}:bedrock-agentcore:*:${this.account}:gateway/*`],
+        })
+      );
+    }
+
+    // --- Business-tool infrastructure (order / customer / refund) ---
+    // DynamoDB-backed idempotency store so a retried refund never double-charges.
+    const refundIdempotencyTable = new dynamodb.Table(this, 'RefundIdempotency', {
+      tableName: 'CustomerSupportAgent-RefundIdempotency',
+      partitionKey: { name: 'idempotency_key', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    const toolsRoot = path.join(projectRoot ?? path.resolve(process.cwd(), '..', '..'), 'tools');
+    const makeToolFn = (id: string, functionName: string, dir: string, timeout: Duration) =>
+      new lambda.Function(this, id, {
+        functionName,
+        runtime: lambda.Runtime.PYTHON_3_12,
+        handler: 'handler.handler',
+        code: lambda.Code.fromAsset(path.join(toolsRoot, dir)),
+        timeout,
+      });
+
+    // check_order has a short timeout so the ORD-TIMEOUT trigger produces a tool-timeout trace.
+    const checkOrderFn = makeToolFn('CheckOrderFn', 'CustomerSupportAgent-CheckOrder', 'check_order', Duration.seconds(10));
+    const getCustomerFn = makeToolFn('GetCustomerFn', 'CustomerSupportAgent-GetCustomer', 'get_customer', Duration.seconds(30));
+    const processRefundFn = makeToolFn('ProcessRefundFn', 'CustomerSupportAgent-ProcessRefund', 'process_refund', Duration.seconds(30));
+
+    // Least privilege: only the refund tool can read/write the idempotency table.
+    refundIdempotencyTable.grantReadWriteData(processRefundFn);
+    processRefundFn.addEnvironment('IDEMPOTENCY_TABLE', refundIdempotencyTable.tableName);
+
     // Create AgentCoreMcp if there are gateways configured
     if (mcpSpec?.agentCoreGateways && mcpSpec.agentCoreGateways.length > 0) {
-      new AgentCoreMcp(this, 'Mcp', {
+      const mcp = new AgentCoreMcp(this, 'Mcp', {
         projectName: spec.name,
         mcpSpec,
         agentCoreApplication: this.application,
         credentials,
         projectTags: spec.tags,
       });
+      // Ensure the tool Lambdas exist before the gateway wires targets to their ARNs.
+      mcp.node.addDependency(checkOrderFn, getCustomerFn, processRefundFn);
+
+      for (const gatewaySpec of mcpSpec.agentCoreGateways) {
+        const policyEngineName = gatewaySpec.policyEngineConfiguration?.policyEngineName;
+        if (!policyEngineName) {
+          continue;
+        }
+
+        const gateway = mcp.gateways.get(gatewaySpec.name);
+        const policyEngine = this.application.policyEngines.get(policyEngineName);
+        if (!gateway || !policyEngine) {
+          continue;
+        }
+
+        const policyEngineResource = policyEngine.node
+          .findAll()
+          .find((child): child is bedrockagentcore.CfnPolicyEngine => child instanceof bedrockagentcore.CfnPolicyEngine);
+        gateway.node.scope?.node.removeDependency(policyEngine);
+        if (policyEngineResource) {
+          gateway.addDependency(policyEngineResource);
+        }
+
+        for (const child of policyEngine.node.findAll()) {
+          if (!(child instanceof bedrockagentcore.CfnPolicy)) {
+            continue;
+          }
+          const policySpec = spec.policyEngines
+            .find((engine) => engine.name === policyEngineName)
+            ?.policies.find((policy) => child.node.id === `Policy${policy.name}`);
+          if (!policySpec) {
+            continue;
+          }
+
+          const statement = policySpec.statement.replace(
+            'resource is AgentCore::Gateway',
+            `resource == AgentCore::Gateway::"${gateway.attrGatewayArn}"`
+          );
+          child.addPropertyOverride('Definition.Policy.Statement', statement);
+          child.addDependency(gateway);
+          for (const target of mcp.node.findAll()) {
+            if (target instanceof bedrockagentcore.CfnGatewayTarget) {
+              child.addDependency(target);
+            }
+          }
+        }
+      }
     }
 
     // Create payment infrastructure via CFN constructs
@@ -219,11 +322,11 @@ export class AgentCoreStack extends Stack {
             connector.provisionMode === 'QUICK_CREATE'
               ? connector
               : {
-                  name: connector.name,
-                  provider: connector.provider,
-                  ...(connector.provisionMode && { provisionMode: connector.provisionMode }),
-                  credentialName: connector.credentialName,
-                };
+                name: connector.name,
+                provider: connector.provider,
+                ...(connector.provisionMode && { provisionMode: connector.provisionMode }),
+                credentialName: connector.credentialName,
+              };
           const compatibilityProps = {
             projectName: spec.name,
             paymentManager: manager,

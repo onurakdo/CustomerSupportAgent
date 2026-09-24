@@ -196,6 +196,7 @@ async function main() {
       connectorParametersByFile,
       harnesses: harnessConfigs.length > 0 ? harnessConfigs : undefined,
       paymentSpec,
+      projectRoot,
       env,
       description: `AgentCore stack for ${spec.name} deployed to ${target.name} (${target.region})`,
       tags: {

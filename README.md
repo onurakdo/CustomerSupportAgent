@@ -1,112 +1,54 @@
-# AgentCore Project
+# Production-Like Customer Support Agent
 
-This project was created with the [AgentCore CLI](https://github.com/aws/agentcore-cli).
+An Amazon Bedrock AgentCore customer support agent built with **Strands**. It runs on AgentCore Runtime, calls business tools through an MCP Gateway, uses AgentCore Memory for cross-session recall, and applies IAM, Cedar authorization, retries, idempotency, and OpenTelemetry observability.
 
-## Project Structure
+## Architecture
 
-```
-my-project/
-├── AGENTS.md               # AI coding assistant context
-├── agentcore/
-│   ├── agentcore.json      # Project config (agents, memories, credentials, gateways, evaluators)
-│   ├── aws-targets.json    # Deployment targets (account + region)
-│   ├── .env.local          # Secrets — API keys (gitignored)
-│   ├── .llm-context/       # TypeScript type definitions for AI assistants
-│   │   ├── agentcore.ts    # AgentCoreProjectSpec types
-│   │   └── aws-targets.ts  # Deployment target types
-│   └── cdk/                # CDK infrastructure (@aws/agentcore-cdk)
-├── app/                    # Agent application code
-└── evaluators/             # Custom evaluator code (if any)
+```mermaid
+flowchart LR
+    User[Customer] --> Runtime[AgentCore Runtime<br/>Strands agent]
+    Runtime -->|MCP over HTTPS / SigV4| Gateway[AgentCore Gateway]
+    Gateway --> Policy[Cedar policy]
+    Policy --> Tools[Lambda tools<br/>check order<br/>get customer<br/>process refund]
+    Runtime --> Memory[AgentCore Memory]
+    Runtime --> Identity[AgentCore Identity]
+    Runtime -. traces and logs .-> CloudWatch[CloudWatch / OpenTelemetry]
+    Tools --> DynamoDB[(Refund idempotency table)]
 ```
 
-## Getting Started
+## Business capabilities
 
-### Prerequisites
+- `check_order`: returns order status, delivery information, and delay reasons.
+- `get_customer`: retrieves a customer profile.
+- `process_refund`: validates and processes refunds with exponential-backoff retries and an idempotency guard.
+- Memory recalls user preferences across separate sessions.
+- Cedar allows refunds up to `$1,000` and denies larger refunds at the gateway, including prompt-injection attempts.
+- Runtime-to-gateway requests use AWS IAM and SigV4. Secrets are stored outside the repository in AgentCore Identity or local ignored environment files.
 
-- **Node.js** 20.x or later
-- **Python 3.10+** and **uv** for Python agents ([install uv](https://docs.astral.sh/uv/getting-started/installation/))
-- **AWS credentials** configured (`aws configure` or environment variables)
-- **Docker** (only for Container build agents)
+The handlers include deterministic failure triggers for timeout, HTTP 500, invalid parameters, and transient refund failures. These produce traceable failure scenarios without requiring external test data. See [docs/evidence.md](docs/evidence.md) for commands and observability evidence.
 
-### Development
-
-Run your agent locally:
+## Validation
 
 ```bash
-agentcore dev
+agentcore validate
+
+python3 -m venv .venv-test
+source .venv-test/bin/activate
+pip install -r requirements-dev.txt
+pytest tests/ -v
 ```
 
-### Validate Invocation Input
+Deployment is performed with `agentcore deploy`. The deployed scenarios cover order lookup, customer lookup, memory across sessions, successful and denied refunds, prompt-injection protection, retry safety, and failure tracing.
 
-Validate runtime invocation payloads before forwarding them to an agent framework. Keep user prompts typed as strings
-and pass only prompt text to the agent.
+## Project layout
 
-### Deployment
+- [app/CustomerSupportAgent](app/CustomerSupportAgent): Strands runtime agent and MCP client.
+- [tools](tools): Lambda business tools.
+- [agentcore/agentcore.json](agentcore/agentcore.json): AgentCore resources and policies.
+- [agentcore/cdk](agentcore/cdk): CDK infrastructure and least-privilege IAM.
+- [tests](tests): Handler and reliability tests.
+- [docs/testing.md](docs/testing.md): Detailed local, deployment, scenario, and failure testing commands.
+- [docs/evidence.md](docs/evidence.md): Required scenario and observability evidence.
+- [Screenshots.docx](Screenshots.docx): Screenshots of key scenarios and results.
 
-Deploy to AWS:
-
-```bash
-agentcore deploy
-```
-
-## Commands
-
-| Command | Description |
-| --- | --- |
-| `agentcore create` | Create a new AgentCore project |
-| `agentcore add` | Add resources (agent, memory, credential, gateway, evaluator, policy) |
-| `agentcore remove` | Remove resources |
-| `agentcore dev` | Run agent locally with hot-reload |
-| `agentcore deploy` | Deploy to AWS via CDK |
-| `agentcore status` | Show deployment status |
-| `agentcore invoke` | Invoke agent (local or deployed) |
-| `agentcore logs` | View agent logs |
-| `agentcore traces` | View agent traces |
-| `agentcore eval` | Run evaluations |
-| `agentcore package` | Package agent artifacts |
-| `agentcore validate` | Validate configuration |
-| `agentcore pause` | Pause a deployed agent |
-| `agentcore resume` | Resume a paused agent |
-| `agentcore fetch` | Fetch remote resource definitions |
-| `agentcore import` | Import existing resources |
-| `agentcore update` | Check for CLI updates |
-
-## Configuration
-
-Edit the JSON files in `agentcore/` to configure your project. See `agentcore/.llm-context/` for type definitions and validation constraints.
-
-The project uses a **flat resource model** — agents, memories, credentials, gateways, evaluators, and policies are top-level arrays in `agentcore.json`. Resources are independent; agents discover memories and credentials at runtime via environment variables or SDK calls.
-
-## Resources
-
-| Resource | Purpose |
-| --- | --- |
-| Agent (runtime) | HTTP, MCP, or A2A agent deployed to AgentCore Runtime |
-| Memory | Persistent context storage with configurable strategies |
-| Credential | API key or OAuth credential providers |
-| Gateway | MCP gateway that routes tool calls to targets |
-| Gateway Target | Tool implementation (Lambda, MCP server, OpenAPI, Smithy, API Gateway) |
-| Evaluator | Custom LLM-as-a-Judge or code-based evaluation |
-| Online Eval Config | Continuous evaluation pipeline for deployed agents |
-| Policy | Cedar authorization policies for gateway tools |
-
-### Agent Types
-
-- **Template agents**: Created from framework templates (Strands, LangChain/LangGraph, GoogleADK, OpenAI Agents, Autogen)
-- **BYO agents**: Bring your own code with `agentcore add agent --type byo`
-- **Import agents**: Import existing Bedrock agents with `agentcore import`
-
-### Build Types
-
-- **CodeZip**: Python source packaged as a zip and deployed directly to AgentCore Runtime
-- **Container**: Docker image built via CodeBuild (ARM64), pushed to ECR, and deployed to AgentCore Runtime
-
-## Documentation
-
-- [AgentCore CLI](https://github.com/aws/agentcore-cli)
-- [AgentCore CDK Constructs](https://github.com/aws/agentcore-l3-cdk-constructs)
-- [Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/)
-
-
-
-
+No credentials or secrets are committed to this repository. `.gitignore` files are included where needed to exclude local credentials, generated artifacts, and development environments.

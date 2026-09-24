@@ -1,0 +1,32 @@
+[
+    {
+        "name": "process_refund",
+        "description": "Process a customer refund for an order. Requires the order ID, the refund amount in whole US dollars, and a reason. Optionally accepts an idempotency_key so that retrying the same operation never creates a duplicate refund. Refunds over the company limit are rejected by policy at the gateway, not by this tool.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "order_id": {
+                    "type": "string",
+                    "description": "The order ID to refund (for example ORD-123)."
+                },
+                "amount": {
+                    "type": "integer",
+                    "description": "Refund amount in whole US dollars (for example 250)."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Reason for the refund (for example 'defective item')."
+                },
+                "idempotency_key": {
+                    "type": "string",
+                    "description": "Optional stable key that makes retries safe. Reusing the same key returns the original refund instead of creating a new one."
+                }
+            },
+            "required": [
+                "order_id",
+                "amount",
+                "reason"
+            ]
+        }
+    }
+]

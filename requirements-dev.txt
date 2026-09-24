@@ -1,0 +1,5 @@
+# Development / test dependencies for the tool Lambda handlers.
+# Install with:  pip install -r requirements-dev.txt
+pytest>=8.0
+moto[dynamodb]>=5.0
+boto3>=1.35

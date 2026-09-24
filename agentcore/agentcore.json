@@ -15,16 +15,117 @@
       "codeLocation": "app/CustomerSupportAgent/",
       "runtimeVersion": "PYTHON_3_14",
       "networkMode": "PUBLIC",
-      "protocol": "HTTP"
+      "protocol": "HTTP",
+      "requestHeaderAllowlist": [
+        "X-Amzn-Bedrock-AgentCore-Runtime-Custom-User-Id"
+      ]
     }
   ],
-  "memories": [],
+  "memories": [
+    {
+      "name": "AgentMemory",
+      "eventExpiryDuration": 20,
+      "strategies": [
+        {
+          "type": "SEMANTIC",
+          "namespaceTemplates": [
+            "/users/{actorId}/facts"
+          ]
+        },
+        {
+          "type": "SUMMARIZATION",
+          "namespaceTemplates": [
+            "/summaries/{actorId}/{sessionId}"
+          ]
+        }
+      ]
+    }
+  ],
   "knowledgeBases": [],
-  "credentials": [],
+  "credentials": [
+    {
+      "name": "GEMINI",
+      "authorizerType": "ApiKeyCredentialProvider"
+    }
+  ],
   "evaluators": [],
   "onlineEvalConfigs": [],
-  "agentCoreGateways": [],
-  "policyEngines": [],
+  "agentCoreGateways": [
+    {
+      "name": "customer-support-gw",
+      "protocolType": "MCP",
+      "description": "MCP gateway exposing order, customer, and refund tools to the Customer Support agent.",
+      "authorizerType": "AWS_IAM",
+      "enableSemanticSearch": true,
+      "exceptionLevel": "NONE",
+      "targets": [
+        {
+          "name": "CheckOrder",
+          "targetType": "lambdaFunctionArn",
+          "lambdaFunctionArn": {
+            "lambdaArn": "arn:aws:lambda:us-east-1:634993259594:function:CustomerSupportAgent-CheckOrder",
+            "toolSchemaFile": "app/CustomerSupportAgent/tool/order_schema.json"
+          }
+        },
+        {
+          "name": "GetCustomer",
+          "targetType": "lambdaFunctionArn",
+          "lambdaFunctionArn": {
+            "lambdaArn": "arn:aws:lambda:us-east-1:634993259594:function:CustomerSupportAgent-GetCustomer",
+            "toolSchemaFile": "app/CustomerSupportAgent/tool/customer_schema.json"
+          }
+        },
+        {
+          "name": "ProcessRefund",
+          "targetType": "lambdaFunctionArn",
+          "lambdaFunctionArn": {
+            "lambdaArn": "arn:aws:lambda:us-east-1:634993259594:function:CustomerSupportAgent-ProcessRefund",
+            "toolSchemaFile": "app/CustomerSupportAgent/tool/refund_schema.json"
+          }
+        }
+      ],
+      "policyEngineConfiguration": {
+        "policyEngineName": "CustomerSupportPolicyEngine",
+        "mode": "ENFORCE"
+      }
+    }
+  ],
+  "policyEngines": [
+    {
+      "name": "CustomerSupportPolicyEngine",
+      "description": "Cedar authorization for gateway tools. Enforces the $1,000 refund limit at the gateway boundary, independent of the agent prompt.",
+      "policies": [
+        {
+          "name": "permit_check_order",
+          "description": "Allow order lookups.",
+          "statement": "permit(principal, action == AgentCore::Action::\"CheckOrder___check_order\", resource is AgentCore::Gateway);",
+          "validationMode": "IGNORE_ALL_FINDINGS",
+          "enforcementMode": "ACTIVE"
+        },
+        {
+          "name": "permit_get_customer",
+          "description": "Allow customer profile lookups.",
+          "statement": "permit(principal, action == AgentCore::Action::\"GetCustomer___get_customer\", resource is AgentCore::Gateway);",
+          "validationMode": "IGNORE_ALL_FINDINGS",
+          "enforcementMode": "ACTIVE"
+        },
+        {
+          "name": "permit_refund_under_limit",
+          "description": "Allow refunds up to and including $1,000.",
+          "statement": "permit(principal, action == AgentCore::Action::\"ProcessRefund___process_refund\", resource is AgentCore::Gateway) when { context.input.amount <= 1000 };",
+          "validationMode": "IGNORE_ALL_FINDINGS",
+          "enforcementMode": "ACTIVE"
+        },
+        {
+          "name": "forbid_refund_over_limit",
+          "description": "Explicitly deny refunds over $1,000 for clear audit evidence and prompt-injection defense.",
+          "statement": "forbid(principal, action == AgentCore::Action::\"ProcessRefund___process_refund\", resource is AgentCore::Gateway) when { context.input.amount > 1000 };",
+          "validationMode": "IGNORE_ALL_FINDINGS",
+          "enforcementMode": "ACTIVE"
+        }
+      ]
+    }
+  ],
   "configBundles": [],
   "abTests": [],
   "harnesses": [],

@@ -1,0 +1,18 @@
+[
+    {
+        "name": "check_order",
+        "description": "Look up the status of a customer order by its order ID (for example ORD-123 or 123). Returns the current status (processing, shipped, delayed, delivered), the item, the estimated delivery date, and a delay reason when the order is delayed. Use this to answer questions like 'Why is my order 123 delayed?'.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "order_id": {
+                    "type": "string",
+                    "description": "The order ID to look up (for example ORD-123)."
+                }
+            },
+            "required": [
+                "order_id"
+            ]
+        }
+    }
+]
